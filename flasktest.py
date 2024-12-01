@@ -27,6 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 def is_password_strong(password):
     # At least 8 characters
     if len(password) < 8:
@@ -37,8 +38,8 @@ def is_password_strong(password):
     # Contains digits
     if not re.search(r'\d', password):
         return False
-    # Contains special characters (excluding spaces)
-    if not re.search(r'[^\w\s]', password):
+    # Contains special characters (including underscore)
+    if not re.search(r'[^\w\s_]', password):  # Treat underscore as special
         return False
     # Password is strong
     return True
@@ -106,6 +107,10 @@ class OTPVerificationForm(FlaskForm):
 class ResendOTPForm(FlaskForm):
     resend_submit = SubmitField('Resend OTP')
 
+@app.route('/learn_more_route')
+def learn_more_route():
+    # Serve the content for the 'learn_more_route' route
+    return render_template('learnmore.html')
 
 # Home Route
 @app.route('/home')
@@ -117,7 +122,8 @@ def home():
         user = cur.fetchone()
         cur.close()
         username = user['username'] if user else "Unknown"
-        return render_template("home.html", username=username)
+        
+        return render_template("home.html", username=username, user_id=user_id)
     else:
         return redirect(url_for('login'))
 
@@ -140,14 +146,22 @@ def register():
         # Validate master password and confirm password match
         if master_pass != confirm_master_pass:
             flash("Master passwords do not match.", "error")
-            return redirect(url_for('register'))
+            return render_template('register.html', 
+                                   username=username, 
+                                   email=email, 
+                                   security_question=security_question, 
+                                   security_answer=security_answer)
 
         # Validate master password strength
         if not is_password_strong(master_pass):
             flash("Master password is not strong enough.", "error")
-            return redirect(url_for('register'))
+            return render_template('register.html', 
+                                   username=username, 
+                                   email=email, 
+                                   security_question=security_question, 
+                                   security_answer=security_answer)
 
-        # **Check if username already exists**
+        # Check if username already exists
         cur = mysql.connection.cursor(DictCursor)
         cur.execute("SELECT Id FROM accounts WHERE username = %s", (username,))
         user_with_same_username = cur.fetchone()
@@ -155,9 +169,13 @@ def register():
 
         if user_with_same_username:
             flash("Username already exists. Please choose a different username.", "error")
-            return redirect(url_for('register'))
+            return render_template('register.html', 
+                                   username=username, 
+                                   email=email, 
+                                   security_question=security_question, 
+                                   security_answer=security_answer)
 
-        # **Check if email already exists**
+        # Check if email already exists
         cur = mysql.connection.cursor(DictCursor)
         cur.execute("SELECT Id FROM accounts WHERE email = %s", (email,))
         user_with_same_email = cur.fetchone()
@@ -165,16 +183,20 @@ def register():
 
         if user_with_same_email:
             flash("Email already registered. Please use a different email address.", "error")
-            return redirect(url_for('register'))
+            return render_template('register.html', 
+                                   username=username, 
+                                   email=email, 
+                                   security_question=security_question, 
+                                   security_answer=security_answer)
 
         # Hash the master password and security answer
         hashed_master_pass = ph.hash(master_pass)
         hashed_security_answer = ph.hash(security_answer)
 
-        # Generate email verification token (e.g., UUID or random string)
+        # Generate email verification token
         email_verification_token = str(uuid.uuid4())
 
-        # Insert the new user into the database with email unverified
+        # Insert the new user into the database
         try:
             cur = mysql.connection.cursor()
             cur.execute("""
@@ -186,7 +208,11 @@ def register():
         except Exception as e:
             print(f"Error inserting new user: {e}")
             flash("An error occurred during registration. Please try again.", "error")
-            return redirect(url_for('register'))
+            return render_template('register.html', 
+                                   username=username, 
+                                   email=email, 
+                                   security_question=security_question, 
+                                   security_answer=security_answer)
 
         # Send email verification
         verification_link = url_for('verify_email', token=email_verification_token, _external=True)
@@ -598,6 +624,8 @@ def login():
                     <p>Best regards,<br>Kryptos***</p>
                     """
                     send_email(user['email'], subject, message)
+                    
+                    session['user_id'] = user['Id']
 
                     session['temp_user_id'] = user['Id']
                     flash("OTP sent to your email!", "success")
@@ -888,7 +916,7 @@ def passwordvault():
 
     cur.close()
 
-    return render_template('passwordvault.html', categories=categories, passwords_by_category=passwords_by_category)
+    return render_template('passwordvault.html', categories=categories, passwords_by_category=passwords_by_category, user_id=user_id)
 
 
 
@@ -1030,6 +1058,31 @@ def fetch_containers():
     finally:
         cur.close()
 
+@app.route('/get_keys/<int:user_id>', methods=['GET'])
+def get_keys(user_id):
+    # Debugging: Check what session and user_id are
+    print(f"Session user_id: {session.get('user_id')}, Requested user_id: {user_id}")
+
+    # Check if the user_id in session matches the one in the URL
+    if 'user_id' not in session or session['user_id'] != user_id:
+        return jsonify({'success': False, 'message': 'Unauthorized access'}), 401
+
+    try:
+        with mysql.connection.cursor() as cur:
+            # Query to fetch keys for the logged-in user
+            cur.execute("SELECT key_id, key_name FROM `keys` WHERE Id = %s", (user_id,))
+            keys = cur.fetchall()
+            print(f"Fetched keys: {keys}")  # Debugging: Check what keys are fetched
+
+            if not keys:
+                return jsonify({'success': False, 'message': 'No keys found for the user'}), 404
+
+            return jsonify({'success': True, 'keys': keys}), 200
+    except Exception as e:
+        print(f"Error fetching keys: {e}")  # Log the error for debugging
+        return jsonify({'success': False, 'message': 'An error occurred while fetching keys'}), 500
+
+
 
 
 @app.route('/add_container', methods=['POST'])
@@ -1039,33 +1092,34 @@ def add_container():
 
     user_id = session['user_id']
 
-    # Parse JSON data
     try:
         data = request.get_json()
         title = data.get('title')
         login_name = data.get('login_name')
         password = data.get('password')
         site = data.get('site')
-        key_name = data.get('key_name')
+        key_id = int(data.get('key_id'))  # Convert to integer
     except Exception as e:
         logging.error(f"Error parsing request data: {e}")
         return jsonify({'success': False, 'message': 'Invalid request format'}), 400
 
-    # Validate required fields
-    if not all([title, login_name, password, site, key_name]):
-        return jsonify({'success': False, 'message': 'All fields are required.'}), 400
+    # Log the received data
+    app.logger.info(f"Received data: {data}")
+    app.logger.info(f"Title: {title}, Login Name: {login_name}, Password: {password}, Site: {site}, Key ID: {key_id}")
 
-    if not site.startswith(('http://', 'https://')):
-        return jsonify({'success': False, 'message': 'Invalid site URL format.'}), 400
+    if not all([title, login_name, password, site, key_id]):
+        return jsonify({'success': False, 'message': 'All fields are required.'}), 400
 
     try:
         with mysql.connection.cursor(DictCursor) as cur:
             # Fetch key_id and encryption key
-            cur.execute("SELECT key_id, `key` FROM `keys` WHERE key_name = %s AND Id = %s", (key_name, user_id))
+            app.logger.info(f"Executing query with key_id: {key_id} and user_id: {user_id}")
+            cur.execute("SELECT key_id, `key` FROM `keys` WHERE key_id = %s AND Id = %s", (key_id, user_id))
             key_record = cur.fetchone()
+            app.logger.info(f"Fetched key record: {key_record}")
 
             if not key_record:
-                logging.warning(f"Key '{key_name}' not found for user {user_id}")
+                logging.warning(f"Key '{key_id}' not found for user {user_id}")
                 return jsonify({'success': False, 'message': 'Key not found or unauthorized access'}), 404
 
             key_id = key_record['key_id']
@@ -1087,8 +1141,9 @@ def add_container():
 
     except Exception as e:
         mysql.connection.rollback()
-        logging.error(f"Error inserting password for user {user_id}: {e}")
+        logging.error(f"Error during request processing: {str(e)}")
         return jsonify({'success': False, 'message': 'An error occurred while adding the container.'}), 500
+
 
 
 
@@ -1378,8 +1433,15 @@ def delete_key(key_id):
         if not key:
             return jsonify({'success': False, 'message': 'Key not found or unauthorized'}), 404
 
-        # Delete all associated passwords
-        cur.execute("DELETE FROM passwords WHERE key_id = %s", (key_id,))
+        cur.execute("""
+            DELETE p 
+            FROM passwords p
+            JOIN `keys` k ON p.key_id = k.key_id
+            WHERE p.key_id = %s AND k.id = %s
+        """, (key_id, user_id))
+
+        # Delete the key itself
+        cur.execute("DELETE FROM `keys` WHERE key_id = %s AND id = %s", (key_id, user_id))
 
         # Delete the key itself
         cur.execute("DELETE FROM `keys` WHERE key_id = %s", (key_id,))

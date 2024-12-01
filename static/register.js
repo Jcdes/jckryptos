@@ -5,12 +5,7 @@ $(document).ready(function () {
         $('#master_pass, #confirm_master_pass').attr('type', type); // Toggle both fields
     });
 
-    // Suggest Password for Master Password
-    $('#suggest-master-pass').on('click', function () {
-        let password = generatePassword();
-        $('#master_pass').val(password).trigger('input');
-        $('#confirm_master_pass').val(password);
-    });
+
 
     // Password Strength Meter
     $('#master_pass').on('input', function () {
@@ -49,13 +44,37 @@ $(document).ready(function () {
         });
     }
 
-    function generatePassword() {
-        const length = 12;
-        const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+~`|}{[]:;?><,./-=";
-        let password = "";
-        for (let i = 0; i < length; ++i) {
-            password += charset.charAt(Math.floor(Math.random() * charset.length));
-        }
-        return password;
+// Password Generator Function
+function generatePassword() {
+    const length = 12; // Desired password length
+    const lowerCase = "abcdefghijklmnopqrstuvwxyz";
+    const upperCase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const digits = "0123456789";
+    const specialChars = "!@#$%^&*()_+~`|}{[]:;?><,./-=";
+    const allChars = lowerCase + upperCase + digits + specialChars;
+
+    // Ensure at least one character from each required set
+    let password = "";
+    password += lowerCase.charAt(Math.floor(Math.random() * lowerCase.length));
+    password += upperCase.charAt(Math.floor(Math.random() * upperCase.length));
+    password += digits.charAt(Math.floor(Math.random() * digits.length));
+    password += specialChars.charAt(Math.floor(Math.random() * specialChars.length));
+
+    // Fill the remaining characters randomly
+    for (let i = 4; i < length; ++i) {
+        password += allChars.charAt(Math.floor(Math.random() * allChars.length));
     }
+
+    // Shuffle the password to randomize character positions
+    password = password.split('').sort(() => 0.5 - Math.random()).join('');
+    return password;
+}
+
+// Suggest Password for Master Password
+$('#suggest-master-pass').on('click', function () {
+    const password = generatePassword();
+    $('#master_pass').val(password).trigger('input'); // Trigger input for validation, if any
+    $('#confirm_master_pass').val(password);
+
+});
 });
